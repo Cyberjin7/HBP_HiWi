@@ -83,12 +83,13 @@ class OsimImporter(object):
         RDmuscle.RobotDesigner.muscles.muscleType = type
 
         if type in ['THELEN', 'MILLARD_EQUIL', 'MILLARD_ACCEL', 'RIGID_TENDON']:
-            RDmuscle.RobotDesigner.muscles.length = muscle.optimal_fiber_length / 0.9
-            RDmuscle.RobotDesigner.muscles.max_isometric_force = muscle.max_isometric_force
+
+            RDmuscle.RobotDesigner.muscles.length = muscle.optimal_fiber_length[0] / 0.9
+            RDmuscle.RobotDesigner.muscles.max_isometric_force = muscle.max_isometric_force[0]
 
         global_properties.active_muscle.set(bpy.context.scene, muscle.name)
-        self.import_pathpoints(muscle, RDmuscle)
 
+        self.import_pathpoints(muscle, RDmuscle)
         self.connect_wrapping_objects(muscle, RDmuscle)
 
 
@@ -127,7 +128,6 @@ class OsimImporter(object):
         :return: RDmuscle: Robot Designer muscle instance
         """
         p = 0
-
         while (True):
             try:
                 # current pathpoint
@@ -293,6 +293,9 @@ class OsimImporter(object):
                 break
 
         # import Thelen2003 Muscles
+
+
+
         m = 0
         while (True):
             try:
