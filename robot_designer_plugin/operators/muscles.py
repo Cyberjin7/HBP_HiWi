@@ -90,7 +90,7 @@ class DeleteMuscle(RDOperator):
 
     """
     bl_idname = config.OPERATOR_PREFIX + "deletemuscle"
-    bl_label = "Delete active Muscle"
+    bl_label = "Delete Active Muscle"
 
     @RDOperator.OperatorLogger
     def execute(self, context):
@@ -118,7 +118,7 @@ class CreateNewMuscle(RDOperator):
     before might be necessary.
     """
     bl_idname = config.OPERATOR_PREFIX + "create_muscle"
-    bl_label = "Create new Muscle"
+    bl_label = "Create New Muscle"
 
     muscle_name: StringProperty(name="Enter new muscle name:")
 
