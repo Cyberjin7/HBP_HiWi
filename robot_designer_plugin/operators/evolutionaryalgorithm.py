@@ -1327,13 +1327,15 @@ class StartSimulationMeshes(RDOperator):
             def reassign_mesh(meshes, m, segment_ofmesh_name, armature_name, new_mesh_name):
                 segment_ofmesh = bpy.context.active_object.data.bones[segment_ofmesh_name]
                 bpy.ops.object.select_all(action='DESELECT')
-                bpy.data.objects[new_mesh_name[4:]].select = True
+                bpy.data.objects[new_mesh_name[4:]].select_set(True)
+
                 bpy.context.active_object.data.bones.active = segment_ofmesh
-                bpy.context.active_object.data.bones.active.select = True
+                bpy.context.active_object.data.bones.active.select_head = True
                 bpy.context.view_layer.objects.active = bpy.data.objects[armature_name]
                 bpy.ops.object.parent_set(type='BONE', keep_transform=True)
                 obj = bpy.data.objects[new_mesh_name[4:]]
                 obj.name = meshes[m]
+
                 obj.RobotDesigner.fileName = obj.name
                 if meshes[m][:3]=='COL':
                     obj.RobotDesigner.tag = 'COLLISION'
@@ -1352,6 +1354,7 @@ class StartSimulationMeshes(RDOperator):
                     and obj.parent.name == armature_name]
 
             for m in range(len(meshes)):
+
                 segment_ofmesh_name = bpy.data.objects[meshes[m]].parent_bone
 
                 bm, obj, _ = editmode_mesh(meshes[m])
@@ -1380,10 +1383,8 @@ class StartSimulationMeshes(RDOperator):
 
                 segment_ofmesh.select = True
                 segment_ofmesh.RobotDesigner.Euler.z.value += co_parent_joint[2]
-
                 segment_ofmesh = bpy.context.active_object.data.bones[segment_ofmesh_name]
                 segment_ofmesh.select = False
-
                 reassign_mesh(meshes, m, segment_ofmesh_name, armature_name, new_mesh_name)
                 bpy.ops.object.select_all(action='DESELECT')
 
@@ -1392,7 +1393,8 @@ class StartSimulationMeshes(RDOperator):
 
             return None
 
-        def placejoints_model (armature_name, min_index_parent_vert, meshes_up, segment_ini_pos, ini_position_verts, mesh_pos_ini):
+        def placejoints_model (armature_name, min_index_parent_vert, meshes_up, segment_ini_pos,
+                               ini_position_verts, mesh_pos_ini, ini_model_location):
             """
             place bone on the correct bone spot
             """
@@ -1413,7 +1415,7 @@ class StartSimulationMeshes(RDOperator):
 
                 co_parent_joint_G = (np.asarray(bm.verts[min_index_parent_vert[m][1]].co) +global_pos_mesh - segment_pos) - \
                                     (np.asarray(ini_position_verts[meshes_up[m]][min_index_parent_vert[m][1]])+mesh_pos_ini[m]
-                                     - segment_ini_pos[m]) - armature_location #global position of the bone
+                                     - segment_ini_pos[m]) - armature_location + ini_model_location  #global position of the bone
 
                 co_parent_joint = bonematrixrotation(armature_name, segment_ofmesh_name, co_parent_joint_G) #from global coordinates to local
 
@@ -1521,11 +1523,12 @@ class StartSimulationMeshes(RDOperator):
             armature = selectrobot(bone_sim)
             meshes = meshes_initial_armature(armature)
             ini_position_verts = verts_co(armature, meshes)
+            ini_model_pose = bpy.data.objects[armature].location
             vert_parent_mesh, meshes_level_up, segment_ini_pos, mesh_pos_ini = minvertexbonedistance(armature, meshes)
 
             print(max_gen)
             for gen in range(max_gen):
-                print('Run Generation ', gen)
+                print('===== Run Generation ', gen)
                 individuals_generation = individualsgen(gen, ini_position_verts, historial_individuals)
                 fitness_generation = fitnessfunction(individuals_generation, ini_position_verts, meshes)
                 selected_parents = selection(gen, individuals_generation, size_offspring, selection_rate, fitness_generation)
@@ -1536,15 +1539,16 @@ class StartSimulationMeshes(RDOperator):
             if result == 'best':
                 offspring_adapted = historial_individuals[max_gen-1]
                 best_individual = best_ind(offspring_adapted, ini_position_verts, meshes)
-                for i in range(n_adapt): #loop for adaptability steps
+                for i in range(n_adapt): # loop for adaptability steps
                     offspring_adapted = neighbours_adapt(offspring_adapted, armature, meshes, adapt_rate, best_individual)
                 sendparametersbest(offspring_adapted, ini_position_verts, armature, meshes)
 
             elif result == 'all':
                 list_instances = createrobotinstances(max_gen, size_offspring, armature, meshes, offset_o, offset_g)
-                for g in range (len(historial_individuals)): #generations
+                for g in range (len(historial_individuals)): # generations
                     offspring_adapted = historial_individuals[g]
-                    for g_ind in range(len(historial_individuals[0])): #individuals of a generation
+                    for g_ind in range(len(historial_individuals[0])): # individuals of a generation
+                        print('===== Create Model: child ' + str(g_ind) + " of generation " + str(g))
                         for i in range(n_adapt): #loop for adaptbility steps
                             offspring_adapted = neighbours_adapt(offspring_adapted, armature, meshes, adapt_rate, g_ind)
                         sendparametersgen(offspring_adapted, armature, list_instances, g, g_ind)
@@ -1552,20 +1556,20 @@ class StartSimulationMeshes(RDOperator):
 
             armatures_population = armatures_scene()
             for ar in range(len(armatures_population)):
-                # TODO place joint mesh and model
-                #placejoints_mesh(armatures_population[ar], vert_parent_mesh, ini_position_verts)
-                #placejoints_model(armatures_population[ar], vert_parent_mesh, meshes_level_up, segment_ini_pos, ini_position_verts, mesh_pos_ini)
-                print('Generating new collision meshes')
-                bpy.context.view_layer.objects.active = bpy.data.objects[armatures_population[ar]]
-                bpy.ops.robotdesigner.copyallvistocol()
+                placejoints_mesh(armatures_population[ar], vert_parent_mesh, ini_position_verts)
+                placejoints_model(armatures_population[ar], vert_parent_mesh, meshes_level_up,
+                                  segment_ini_pos, ini_position_verts, mesh_pos_ini, ini_model_pose)
+                # print('Generating new collision meshes')
+                # bpy.context.view_layer.objects.active = bpy.data.objects[armatures_population[ar]]
+                # bpy.ops.robotdesigner.copyallvistocol()
 
-                print("Generating new physics frames")
-                for bone in bpy.data.objects[armatures_population[ar]].data.bones:  # bpy.context.active_object.data.bones:
-                    bpy.ops.robotdesigner.createphysicsframe(frameName='bone.name')
-                    bpy.context.scene.RobotDesigner.segment_name = bone.name
-                    bpy.data.objects['PHYS_' + bone.name].RobotDesigner.dynamics.mass = 1.0
-                    bpy.ops.robotdesigner.computephysicsframe(from_visual_geometry=False)
-                    bpy.ops.robotdesigner.computemass(density=1.0, from_visual_geometry=False)
+                # print("Generating new physics frames")
+                # for bone in bpy.data.objects[armatures_population[ar]].data.bones:  # bpy.context.active_object.data.bones:
+                #     bpy.ops.robotdesigner.createphysicsframe(frameName='bone.name')
+                #     bpy.context.scene.RobotDesigner.segment_name = bone.name
+                #     bpy.data.objects['PHYS_' + bone.name].RobotDesigner.dynamics.mass = 1.0
+                #     bpy.ops.robotdesigner.computephysicsframe(from_visual_geometry=False)
+                #     bpy.ops.robotdesigner.computemass(density=1.0, from_visual_geometry=False)
             #current_scene.RobotDesigner.display_mesh_selection = 'visual'
 
             print('-- finished evolution --')
