@@ -542,7 +542,7 @@ def create_sdf(operator: RDOperator, context, filepath: str, meshpath: str, topl
         ### Add Physics
         frame_names = [
             frame.name for frame in context.scene.objects if
-            frame.RobotDesigner.tag == 'PHYSICS_FRAME' and frame.parent_bone == segment.name]
+            frame.RobotDesigner.tag == 'PHYSICS_FRAME' and frame.parent_bone == segment.name and frame.parent.name == global_properties.model_name.get(bpy.context.scene)]
 
         # If no frame is connected create a default one. This is required for Gazebo!
         operator.logger.info("frame names: %s", frame_names)
