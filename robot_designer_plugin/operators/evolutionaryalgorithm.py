@@ -59,6 +59,8 @@ from ..core import config, PluginManager, RDOperator
 from .helpers import ModelSelected
 from ..properties.globals import global_properties
 
+from ..operators import muscles
+from mathutils import Vector
 
 @RDOperator.Preconditions(ModelSelected)
 @PluginManager.register_class
@@ -1261,7 +1263,7 @@ class StartSimulationMeshes(RDOperator):
                     bm.verts[v].select = False
                     bmesh.update_edit_mesh(obj, True)
 
-                mesh.select = False
+                # mesh.select = False
 
             bpy.ops.object.mode_set(mode='OBJECT')
             bpy.ops.object.select_all(action='DESELECT')
@@ -1499,6 +1501,212 @@ class StartSimulationMeshes(RDOperator):
 
             return list_instances
 
+        def link_pathpoint_vertex(muscle_names):
+
+            print("Link a pathpoint to its corresponding vertex")
+
+            def minus(list1, list2):
+                # Supposed both lists are of the same length and made just for this purpose
+                if len(list1) != len(list2) or len(list1) != 3:
+                    print('The size of the lists does not fit')
+                    return
+
+                distance_x = list1[0] - list2[0]
+                distance_y = list1[1] - list2[1]
+                distance_z = list1[2] - list2[2]
+                distance = (distance_x ** 2 + distance_y ** 2 + distance_z ** 2) ** 0.5
+                return distance
+
+            linking_list = []
+            for each_muscle in muscle_names:
+                amount_of_pathpoints = len(bpy.data.objects[each_muscle].RobotDesigner.muscles.pathPoints)
+                each_muscle_list = [each_muscle]
+                for pathpoint in range(amount_of_pathpoints):
+                    # Taking only meshes into consideration which belongs to the same segment
+                    current_segment = bpy.data.objects[each_muscle].RobotDesigner.muscles.pathPoints[
+                        pathpoint].coordFrame  # String Value
+                    possible_meshes = [mesh.name for mesh in bpy.context.scene.objects if mesh.type == 'MESH' and
+                                       mesh.parent_bone == current_segment and mesh.parent == bpy.context.active_object]
+
+                    if len(possible_meshes) == 0:       # break condition in case a pathpoint was deleted
+                        print("break_condition is fullfilled" )
+                        break
+                    # The robot model must be selected else the line above won't work
+                    # Linking the muscle pathpoints to the vertices
+                    # ToDo: Maybe it is possible to return just the indices and the mesh to the corresponding muscle
+                    #  pathpoint
+
+                    current_pathpoints_values = list(bpy.data.curves[each_muscle].splines[0].points[pathpoint].co)
+                    current_pathpoints_values.pop()  # this value represents the width of the muscle - not needed
+                    information_mesh = []
+
+                    for mesh in possible_meshes:
+                        for index in range(len(bpy.data.objects[mesh].data.vertices)):
+                            # Need to work with global coordinates
+                            v_local = bpy.data.objects[mesh].data.vertices[index].co
+                            v_global = bpy.data.objects[mesh].matrix_world @ v_local
+                            new_distance = minus(current_pathpoints_values, list(v_global))
+
+                            # Checking for the shortest distance for a single mesh
+                            if index == 0 and mesh == possible_meshes[0]:
+                                shortest_distance = new_distance
+                                information_index = [mesh, index, shortest_distance]
+
+                            elif new_distance < shortest_distance:
+                                shortest_distance = new_distance
+                                # index with the shortest distance of a single mesh
+                                information_index = [mesh, index, shortest_distance]
+                            else:
+                                pass
+                        information_mesh.append(information_index)  # (There might be a more efficient approach)
+
+                        # List which has the index for the shortest distance for each mesh
+
+                    # Checking the shortest distance in all of the meshes
+                    for number in range(len(information_mesh)):
+                        if number == 0:
+                            information_pathpoint = information_mesh[0]  # basically information_index
+
+                        elif information_mesh[number][2] < information_mesh[number - 1][2] and number != 0:
+                            information_pathpoint = information_mesh[number]
+
+                        else:
+                            pass
+
+                    information_pathpoint.pop()
+                    each_muscle_list.append(pathpoint)
+                    each_muscle_list.append(information_pathpoint)
+
+                linking_list.append(each_muscle_list)
+
+            return linking_list
+
+        ## funcion which reattaches the muscle pathpoints to the meshes AFTER the evolution
+        def reattach_muscle(linking_list):
+
+            for muscle in linking_list:
+                pathpoint = 1  # skipping the first entry which is the name of the muscle
+                pathpoint_index = 0
+                while pathpoint_index <= muscle[-2]:
+                    width = bpy.data.curves[muscle[0]].splines[0].points[pathpoint_index].co[3]
+                    # global coordinates
+                    new_local_vertices = bpy.data.objects[muscle[pathpoint + 1][0]].data.vertices[
+                        muscle[pathpoint + 1][1]].co
+                    new_global_vertices = bpy.data.objects[muscle[pathpoint + 1][0]].matrix_world @ new_local_vertices
+
+                    new_vertices = list(new_global_vertices)
+                    new_vertices.append(width)
+                    bpy.data.curves[muscle[0]].splines[0].points[pathpoint_index].co = Vector(new_vertices)
+                    pathpoint += 2
+                    pathpoint_index += 1
+
+
+        def create_muscles_(original_armature, list_instances, linking_list):
+            print("Create Muscle")
+            def has_suffix_number(name):
+                index_suffix = 0
+                for point in name[::-1]:
+                    if point == '.':
+                        try:
+                            org_value = int(name[index_suffix:])
+                        except:
+                            return False, None
+                        else:
+                            return True, index_suffix - 1
+                    index_suffix -= 1
+                return False, None
+
+            ##section to investigate the original armature
+            all_original_meshes = [mesh.name for mesh in bpy.data.objects[original_armature].children if
+                                   mesh.name[0:4] == 'VIS_']
+            # get all the different types that occur in the original mesh
+            #    ToDo: find a blender function which returns the primitive type
+            original_meshes_adjusted = []
+            for org_mesh in all_original_meshes:
+                control, iftrue = has_suffix_number(org_mesh)
+                if control == True:
+                    original_meshes_adjusted.append(org_mesh[:iftrue])
+                else:
+                    original_meshes_adjusted.append(org_mesh)
+
+            types_of_meshes = list(set(original_meshes_adjusted))  # unique entries of mesh types (strings)
+
+            # get a count of the amount of occurrences of each type
+            # the first entry of types_of_meshes corresponds to the first entry of amount_occurrence
+            amount_occurance = []
+            for unique in types_of_meshes:
+                count = 0
+                for single_mesh in original_meshes_adjusted:
+                    if single_mesh == unique:
+                        count += 1
+                    else:
+                        pass
+                amount_occurance.append(count)  # (integers)
+
+            # merging these two lists into one dictionary
+            information_dictionary = {}
+            for meshtype in types_of_meshes:
+                for amount in amount_occurance:
+                    information_dictionary[meshtype] = amount
+                    amount_occurance.remove(amount)
+                    break
+
+            for selected_generation in list_instances:
+                 for created_armature in selected_generation:
+                    bpy.ops.robotdesigner.selectarmature(model_name=created_armature)
+
+                    control, iftrue = has_suffix_number(created_armature)
+                    if control == True:
+                        suffix_str_created_armature = created_armature[iftrue:]
+                        suffix_int_created_armature = int(suffix_str_created_armature[1:])
+
+                    else:
+                        suffix_str_created_armature = ""
+                        suffix_int_created_armature = 1
+
+
+                    for muscle in linking_list:
+                        new_muscle_name = muscle[0] + suffix_str_created_armature
+                        bpy.ops.robotdesigner.create_muscle(muscle_name=new_muscle_name)
+
+                        pathpoint = 1
+                        pathpoint_index = 0
+                        while pathpoint_index <= muscle[-2]:
+                            # setting the actual values -- linking the original information with the created armatures
+                            control, iftrue = has_suffix_number(muscle[pathpoint + 1][0])
+                            if control:
+                                suffix_str_mesh = muscle[pathpoint + 1][0][iftrue:]
+                                suffix_int_mesh = int(suffix_str_mesh[1:])
+                                mesh_name_without_suffix = muscle[pathpoint + 1][0][:iftrue]
+                                difference_in_number = suffix_int_mesh + information_dictionary[
+                                    mesh_name_without_suffix]*suffix_int_created_armature
+
+                            else:
+                                mesh_name_without_suffix = muscle[pathpoint + 1][0]
+                                difference_in_number = information_dictionary[mesh_name_without_suffix]*suffix_int_created_armature
+
+                            mesh_name_with_new_suffix = mesh_name_without_suffix + '.' + str(difference_in_number).zfill(3)
+                            # segment of each pathpoint
+                            original_segment = bpy.data.objects[muscle[0]].RobotDesigner.muscles.pathPoints[
+                                muscle[pathpoint]].coordFrame
+                            ####
+                            # calculating the correct mesh-location in the representation of the new robots
+
+                            # Need to work with global coordinates
+                            v_local = bpy.data.objects[mesh_name_with_new_suffix].data.vertices[
+                                muscle[pathpoint + 1][1]].co
+                            v_global = bpy.data.objects[mesh_name_with_new_suffix].matrix_world @ v_local
+
+                            # moving cursor to the specific coordinates (global!)
+                            bpy.context.scene.cursor.location = v_global  # tuple(v_global)
+                            # creating the muscle pathpoint
+                            bpy.ops.robotdesigner.create_muscle_pathpoint()
+                            bpy.ops.robotdesigner.select_segment_muscle(segment_name=original_segment,
+                                                                        pathpoint_nr=pathpoint_index + 1)
+
+                            pathpoint += 2
+                            pathpoint_index += 1
+            return None
 
 
         def main():
@@ -1526,6 +1734,9 @@ class StartSimulationMeshes(RDOperator):
             ini_model_pose = bpy.data.objects[armature].location
             vert_parent_mesh, meshes_level_up, segment_ini_pos, mesh_pos_ini = minvertexbonedistance(armature, meshes)
 
+            muscle_names = [obj.name for obj in bpy.data.objects if
+                            bpy.data.objects[obj.name].RobotDesigner.muscles.robotName != '']
+            linking_list = link_pathpoint_vertex(muscle_names)  # initial position of the pathpoints
             print(max_gen)
             for gen in range(max_gen):
                 print('===== Run Generation ', gen)
@@ -1539,37 +1750,39 @@ class StartSimulationMeshes(RDOperator):
             if result == 'best':
                 offspring_adapted = historial_individuals[max_gen-1]
                 best_individual = best_ind(offspring_adapted, ini_position_verts, meshes)
-                for i in range(n_adapt): # loop for adaptability steps
-                    offspring_adapted = neighbours_adapt(offspring_adapted, armature, meshes, adapt_rate, best_individual)
+                for i in range(n_adapt): #loop for adaptability steps
+                    offspring_adapted = neighbours_adapt(offspring_adapted, armature, meshes, adapt_rate,
+                                                         best_individual)
                 sendparametersbest(offspring_adapted, ini_position_verts, armature, meshes)
+                reattach_muscle(linking_list)
 
             elif result == 'all':
                 list_instances = createrobotinstances(max_gen, size_offspring, armature, meshes, offset_o, offset_g)
-                for g in range (len(historial_individuals)): # generations
+                for g in range(len(historial_individuals)): #generations
                     offspring_adapted = historial_individuals[g]
                     for g_ind in range(len(historial_individuals[0])): # individuals of a generation
                         print('===== Create Model: child ' + str(g_ind) + " of generation " + str(g))
                         for i in range(n_adapt): #loop for adaptbility steps
                             offspring_adapted = neighbours_adapt(offspring_adapted, armature, meshes, adapt_rate, g_ind)
                         sendparametersgen(offspring_adapted, armature, list_instances, g, g_ind)
-
+                create_muscles_(armature, list_instances, linking_list)
 
             armatures_population = armatures_scene()
             for ar in range(len(armatures_population)):
-                placejoints_mesh(armatures_population[ar], vert_parent_mesh, ini_position_verts)
-                placejoints_model(armatures_population[ar], vert_parent_mesh, meshes_level_up,
-                                  segment_ini_pos, ini_position_verts, mesh_pos_ini, ini_model_pose)
-                # print('Generating new collision meshes')
-                # bpy.context.view_layer.objects.active = bpy.data.objects[armatures_population[ar]]
-                # bpy.ops.robotdesigner.copyallvistocol()
+                # TODO place joint mesh and model
+                #placejoints_mesh(armatures_population[ar], vert_parent_mesh, ini_position_verts)
+                #placejoints_model(armatures_population[ar], vert_parent_mesh, meshes_level_up, segment_ini_pos, ini_position_verts, mesh_pos_ini)
+                print('Generating new collision meshes')
+                bpy.context.view_layer.objects.active = bpy.data.objects[armatures_population[ar]]
+                bpy.ops.robotdesigner.copyallvistocol()
 
-                # print("Generating new physics frames")
-                # for bone in bpy.data.objects[armatures_population[ar]].data.bones:  # bpy.context.active_object.data.bones:
-                #     bpy.ops.robotdesigner.createphysicsframe(frameName='bone.name')
-                #     bpy.context.scene.RobotDesigner.segment_name = bone.name
-                #     bpy.data.objects['PHYS_' + bone.name].RobotDesigner.dynamics.mass = 1.0
-                #     bpy.ops.robotdesigner.computephysicsframe(from_visual_geometry=False)
-                #     bpy.ops.robotdesigner.computemass(density=1.0, from_visual_geometry=False)
+                print("Generating new physics frames")
+                for bone in bpy.data.objects[armatures_population[ar]].data.bones:  # bpy.context.active_object.data.bones:
+                    bpy.ops.robotdesigner.createphysicsframe(frameName='bone.name')
+                    bpy.context.scene.RobotDesigner.segment_name = bone.name
+                    bpy.data.objects['PHYS_' + bone.name].RobotDesigner.dynamics.mass = 1.0 #the problem with the child bone lies here
+                    bpy.ops.robotdesigner.computephysicsframe(from_visual_geometry=False)
+                    bpy.ops.robotdesigner.computemass(density=1.0, from_visual_geometry=False)
             #current_scene.RobotDesigner.display_mesh_selection = 'visual'
 
             print('-- finished evolution --')
